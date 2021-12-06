@@ -122,6 +122,17 @@ class Player:
         '''
         return points
 
+    def odds(self, start_point, shot, trials):
+        intended_distance = shot[0]
+        intended_angle = shot[1]
+        successful = 0
+        for t in range(0,trials):
+            actual_distance = self.rng.normal(intended_distance, intended_distance / self.skills[player_idx])
+            actual_angle = self.rng.normal(intended_angle, 1 / (2 * self.skills[player_idx]))
+            if is_roll_in_polygon(start_point, actual_distance, actual_angle):
+                successful += 1
+        return successful
+
     def calculate_angle_and_distance(self, point_a, point_b):
         distance = point_a.distance(point_b)
         angle = sympy.atan2(point_b.y - point_a.y, point_b.x - point_a.x)
