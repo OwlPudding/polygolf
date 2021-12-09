@@ -9,17 +9,7 @@ from golf_app import GolfApp
 from golf_map import GolfMap
 import constants
 from utils import *
-from players.default_player import Player as DefaultPLayer
-from players.g1_player import Player as G1_Player
-from players.g2_player import Player as G2_Player
-from players.g3_player import Player as G3_Player
-from players.g4_player import Player as G4_Player
 from players.g5_player import Player as G5_Player
-from players.g6_player import Player as G6_Player
-from players.g7_player import Player as G7_Player
-from players.g8_player import Player as G8_Player
-from players.g9_player import Player as G9_Player
-
 
 return_vals = ["player_names", "skills", "scores", "player_states", "penalties", "timeout_count", "error_count", "winner_list", "total_time_sorted",]
 
@@ -77,7 +67,7 @@ class GolfGame:
         self.golf = GolfMap(args.map, self.logger)
         self.players = []
         self.player_names = []
-        self.skills = []
+        self.skills = [args.skill]
         self.player_states = []
         self.played = []
         self.curr_locs = []
@@ -131,12 +121,8 @@ class GolfGame:
         count_used = {k: 0 for k in player_count}
         for player_name in player_list:
             if player_name in constants.possible_players:
-                if player_name.lower() == "d":
-                    player_class = DefaultPLayer
-                    base_player_name = "Default Player"
-                else:
-                    player_class = eval("G{}_Player".format(player_name))
-                    base_player_name = "Group {}".format(player_name)
+                player_class = eval("G{}_Player".format(player_name))
+                base_player_name = "Group {}".format(player_name)
                 count_used[player_name] += 1
                 if player_count[player_name] == 1:
                     self.__add_player(player_class, "{}".format(base_player_name), base_player_name=base_player_name)
@@ -147,7 +133,7 @@ class GolfGame:
 
     def __add_player(self, player_class, player_name, base_player_name):
         if player_name not in self.player_names:
-            skill = self.rng.integers(constants.min_skill, constants.max_skill+1)
+            skill = self.skills[0] #rng.integers(constants.min_skill, constants.max_skill+1)
             self.logger.info("Adding player {} from class {} with skill {}".format(player_name, player_class.__module__, skill))
             precomp_dir = os.path.join("precomp", base_player_name)
             if not os.path.isdir(precomp_dir):
@@ -156,7 +142,7 @@ class GolfGame:
             player = player_class(skill=skill, rng=self.rng, logger=self.__get_player_logger(player_name), golf_map=self.golf.golf_map.copy(), start=self.golf.start.copy(), target=self.golf.target.copy(), map_path=player_map_path, precomp_dir=precomp_dir)
             self.players.append(player)
             self.player_names.append(player_name)
-            self.skills.append(skill)
+            # self.skills.append(skill)
             self.player_states.append("NP")
             self.played.append([])
             self.curr_locs.append(self.golf.start.copy())
