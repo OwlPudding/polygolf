@@ -9,8 +9,8 @@ import logging
 from typing import Tuple
 from shapely.geometry import Polygon, Point, LineString
 from time import time
-from shapely.ops import triangulate
 import math
+import matplotlib.pyplot as plt
 
 
 def line_in_polygon(point_a, point_b, polygon):
@@ -54,38 +54,60 @@ def direct_distance_angle(curr_loc, target, skill):
 
     return distance, angle
 
+def is_going_back(previous_angle, new_angle):
+    if not previous_angle:
+        return (False, (0,0))
+    window = np.pi/4 # check if one angle within 90 deg of the other angle
+    opposite_angle = np.pi - previous_angle if previous_angle >= np.pi else np.pi + previous_angle # flipping the direction 180 deg
+    opposite_angle = opposite_angle if opposite_angle >= 0 else (2 * np.pi) + opposite_angle
+    new_angle = new_angle if new_angle >= 0 else (2 * np.pi) + new_angle
+    a_min , a_max = opposite_angle - window, opposite_angle + window
+    if new_angle >= opposite_angle - window and new_angle <= opposite_angle + window:
+        return (True, (a_min, a_max))
+    return (False, (0,0))
 
-def generate_points(curr_loc, target, polygon, skill, increment=25):
+
+def generate_points(curr_loc, target, polygon, skill, increment=25, search_angle=np.pi, backtracking=False, angle_range=None):
     distance, angle = direct_distance_angle(curr_loc, target, skill)
+    angle = angle-np.pi if backtracking else angle
+    theta_min, theta_max = 0, 0
+    if angle_range:
+        angle = angle + np.pi
+        theta_min, theta_max = angle_range
+
     if distance < 20 and line_in_polygon(curr_loc, target, polygon):
         return [LandingPoint(target, distance, angle, curr_loc, target)]
 
     points = []
     r = distance
     while r > 0:
-        semicircle_length = np.pi * r
+        semicircle_length = search_angle * r
         num_sector = int(semicircle_length / increment)  # divide the semicircle into equally sized sectors
         num_sector = num_sector if num_sector % 2 == 0 else num_sector + 1
         if num_sector == 0:
             r -= increment
             continue
         arc_length = semicircle_length / num_sector
-        angle_increment = np.pi / (2 * num_sector)
+        angle_increment = search_angle / num_sector
         for i in range(0, int(num_sector) + 1):
             new_angle = float(angle + (i * angle_increment))
+            if new_angle <= theta_max and new_angle >= theta_min:
+                continue
             point = Point(curr_loc.x + r * np.cos(new_angle),
                           curr_loc.y + r * np.sin(new_angle))
 
             if LandingPoint.is_on_land(point, polygon):
-                lp = LandingPoint(point, r, new_angle, curr_loc, target)
+                lp = LandingPoint(point, r, new_angle, curr_loc, target, backtracking=backtracking)
                 points.append(lp)
             if i > 0:
                 new_angle = float(angle - (i * angle_increment))
+                if new_angle <= theta_max and new_angle >= theta_min:
+                    continue
                 point = Point(curr_loc.x + r * np.cos(new_angle),
                               curr_loc.y + r * np.sin(new_angle))
 
                 if LandingPoint.is_on_land(point, polygon):
-                    lp = LandingPoint(point, r, new_angle, curr_loc, target)
+                    lp = LandingPoint(point, r, new_angle, curr_loc, target, backtracking=backtracking)
                     points.append(lp)
         r -= increment
 
@@ -108,7 +130,7 @@ def search_landing_points(points, polygon, skill, rng):
 
 
 class LandingPoint(object):
-    def __init__(self, point, distance_from_origin, angle_from_origin, start_point, hole_point):
+    def __init__(self, point, distance_from_origin, angle_from_origin, start_point, hole_point, backtracking=False):
         # distance_from_origin is the distance from our curr_location to the landing point
 
         self.point = point
@@ -118,6 +140,7 @@ class LandingPoint(object):
         self.score_threshold = 95
         self.trials = 20
         self.start_point = start_point
+        self.backtracking = backtracking
 
 
     @staticmethod
@@ -143,18 +166,19 @@ class LandingPoint(object):
         try:
             return self.distance_to_hole
         except AttributeError:
-            self.distance_to_hole = -self.point.distance(self.hole)
+            self.distance_to_hole = self.point.distance(self.hole) if self.backtracking else -self.point.distance(self.hole)
             return self.distance_to_hole
 
     def score(self, polygon, skill, rng):
         # uses confidence and heuristic
         return self.heuristic() + (self.confidence(polygon, skill, rng) * 100)
 
-
 class MultipleLandingPoints:
 
-    def __init__(self, start_lp):
+    def __init__(self, start_lp, backtracking=False):
         self.path = [start_lp]
+        self.backtracking = backtracking
+
 
     def heuristic(self):
         return self.path[-1].heuristic()
@@ -171,8 +195,8 @@ class MultipleLandingPoints:
     def add_point(self, polygon, skill, rng):
         last_point = self.path[-1]
 
-        landing_points = generate_points(last_point.point, last_point.hole, polygon, skill)
-        next_point= search_landing_points(landing_points, polygon, skill, rng)
+        landing_points = generate_points(last_point.point, last_point.hole, polygon, skill, backtracking=self.backtracking)
+        next_point = search_landing_points(landing_points, polygon, skill, rng)
         if next_point:
             self.path.append(next_point)
 
@@ -215,6 +239,7 @@ class Player:
         self.skill = skill
         self.rng = rng
         self.logger = logger
+        self.previous_angle = None
 
 
     def play(self, score: int, golf_map: sympy.Polygon, target: sympy.geometry.Point2D,
@@ -240,11 +265,38 @@ class Player:
 
         curr_loc = convert_sympy_shapely(curr_loc)
         target = convert_sympy_shapely(target)
-        landing_points = generate_points(curr_loc, target, self.shapely_polygon, self.skill)
 
-        paths = [MultipleLandingPoints(lp) for lp in landing_points]
-        for path in paths:
-            if path.distance_to_hole() > 20:
-                path.add_point(self.shapely_polygon, self.skill, self.rng)
-        largest_point = search_landing_points(paths, self.shapely_polygon, self.skill, self.rng)
-        return largest_point.path[0].distance_from_origin, largest_point.path[0].angle_from_origin
+        _, direct_angel = direct_distance_angle(curr_loc, target, self.skill)
+        going_back, angle_range = is_going_back(self.previous_angle, direct_angel)
+        if going_back:
+            landing_points = generate_points(curr_loc, target, self.shapely_polygon, self.skill, backtracking=True, angle_range=angle_range)
+            paths = [MultipleLandingPoints(lp, backtracking=True) for lp in landing_points]
+            for path in paths:
+                if path.distance_to_hole() > 20:
+                    path.add_point(self.shapely_polygon, self.skill, self.rng)
+            largest_point = search_landing_points(paths, self.shapely_polygon, self.skill, self.rng)
+        else:
+            landing_points = generate_points(curr_loc, target, self.shapely_polygon, self.skill)
+
+            paths = [MultipleLandingPoints(lp) for lp in landing_points]
+            for path in paths:
+                if path.distance_to_hole() > 20:
+                    path.add_point(self.shapely_polygon, self.skill, self.rng)
+            largest_point = search_landing_points(paths, self.shapely_polygon, self.skill, self.rng)
+            # In theory, we can reach 200+skill in one shot, using 200 to go even lower
+            if sum([p.distance_from_origin for p in largest_point.path]) < 200 and len(largest_point.path) > 1:
+                landing_points = generate_points(curr_loc, target, self.shapely_polygon, self.skill, backtracking=True)
+                paths = [MultipleLandingPoints(lp, backtracking=True) for lp in landing_points]
+                for path in paths:
+                    if path.distance_to_hole() > 20:
+                        path.add_point(self.shapely_polygon, self.skill, self.rng)
+                largest_point = search_landing_points(paths, self.shapely_polygon, self.skill, self.rng)
+
+        distance, angle = largest_point.path[0].distance_from_origin, largest_point.path[0].angle_from_origin
+        self.previous_angle = angle
+        print("curr_loc")
+        print("x: "+str(curr_loc.x)+" ,y: "+str(curr_loc.y))
+        print("path")
+        pp = ["x: "+str(p.point.x)+" ,y: "+str(p.point.y) for p in largest_point.path]
+        print("\n".join(pp))
+        return (distance, angle)
